@@ -1,0 +1,119 @@
+---
+title: "Wisconsin Senate District 26 Results"
+author: "Harald Kliems"
+date: "8/12/2020"
+output: html_document
+---
+
+
+
+
+
+Wisconsin had primary elections for the State Assembly and Senate on August 11. A good opportunity to practice creating some maps. I'll focus on the race for Senate District 26.
+
+# Data
+Results by ward are available from the Dane County Clerk's website; geographies for the wards are available on the City of Madison OpenData portal.
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(tmap)
+library(sf)
+library(tidycensus)
+get_acs(geography = "county", variable = "S0601_C01_016", state = "WI", geometry = TRUE)
+```
+
+```{r}
+elect <- read_xlsx("data/ElectionResults.xlsx", 
+                           skip = 7, 
+                           col_names = c("precincts",
+                                         "moe",
+                                         "elm",
+                                         "bur",
+                                         "ben",
+                                         "roy",
+                                         "dav",
+                                         "ime",
+                                         "wri"))
+
+wards <- read_sf("data/Wards.shp")
+
+elect
+wards %>% 
+  filter(SEN_DIST == 26)
+```
+Data looks okay, but there are mismatches to deal with:
+
+- There are wards with 0 total votes in `elect`
+- The total number of wards between `elect` and `ward` doesn't match
+- The ID numbers of wards in `elect` seem to be possibly not unique
+- There is a ward with an ID of 1-2 in `elect`, and several wards in `wards` with an ID of `-1`
+
+# Adding percentages
+
+```{r}
+elect <- elect %>% 
+  mutate(total_votes = rowSums(.[2:9])) %>% 
+  mutate(across(2:9, ~ .x/total_votes*100, .names = "{col}_pct"))
+```
+
+
+# Who won?
+Answering the question who won in each district requires making the `elect` data long, then grouping by precinct, and then doing a comparison of the actual number of votes with the max number of votes in each precinct. Not exactly straightforward, but for a multi-candidate race, I can't think of a more elegant option.
+
+```{r}
+
+
+winners <- elect %>% 
+  pivot_longer(2:9, names_to = "candidate", values_to = "votes") %>% 
+  group_by(precincts) %>% 
+  filter(votes != 0) %>% 
+  filter(votes == max(votes)) %>% 
+  select(-ends_with("pct")) %>% 
+  mutate(winning_percent = round(votes/total_votes*100, 1))
+
+winners
+
+```
+
+Each ward was one by either Kelda Roys or Nada Elmikasfi:
+
+```{r}
+unique(winners$candidate)
+```
+
+# Map it
+Who won their districts?
+
+```{r}
+df <- winners %>% 
+  mutate(ID = as.integer(str_extract(precincts, "[0-9]{3}"))) %>% #extracts the ward number
+  mutate(ID = ifelse(precincts == "V Shorewood Hills Wds 1-2",
+                     ))
+  mutate(candidate = case_when(candidate == "elm" ~ "Nada Elmikashfi",
+                               candidate == "roy" ~ "Kelda Roys"))
+
+df2 <- wards %>% 
+  inner_join(df, by = c("WARD" = "ID"))
+
+tmap_mode("view")
+tm_shape(df2) +
+  tm_polygons("candidate", 
+              legend.title = "Winning candidate",
+              popup.vars = "winning_percent")
+
+
+```
+What was the winning margin of Kelda Roys over Nada Elmikashfi?
+```{r}
+elect2 <- elect %>% 
+  mutate(margin = roy_pct - elm_pct,
+         ID = as.integer(str_extract(precincts, "[0-9]{3}")))
+
+df3 <- wards %>% 
+  inner_join(elect2, by = c("WARD" = "ID"))
+
+tm_shape(df3) +
+  tm_polygons("margin", title = "Winning margin Kelda Roys")
+```
+
